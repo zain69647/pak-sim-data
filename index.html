@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PAK SIM DATABASE</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Poppins:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <main class="page-shell">
+        <header class="app-header">
+            <div>
+                <div class="brand-mark">Live Lookup Portal</div>
+                <h1 class="app-title premium-font">PAK SIM DATABASE</h1>
+                <p class="app-subtitle">Search by phone number or CNIC using a simple, readable interface built for desktop and mobile screens.</p>
+            </div>
+            <div class="status-pill">System Live</div>
+        </header>
+
+        <section class="content-area">
+            <div class="panel search-panel">
+                <h2 class="panel-title">Find a Record</h2>
+                <p class="panel-copy">Enter digits only. Phone numbers can be 10 to 12 digits, and CNIC searches use 13 digits.</p>
+                <form class="search-form" id="searchForm">
+                    <div class="input-wrap">
+                        <svg class="input-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m21 21-4.35-4.35m1.1-5.4a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0Z"/>
+                        </svg>
+                        <input type="text" name="query" id="searchInput" placeholder="03001234567 or 3520212345678" class="search-input" inputmode="numeric" pattern="[0-9]{10,13}" required>
+                    </div>
+                    <button type="submit" class="primary-button" id="searchButton">Search</button>
+                    <button type="button" class="secondary-button hidden" id="clearButton">Clear</button>
+                </form>
+
+                <div class="helper-row">
+                    <span class="helper-chip">Digits only</span>
+                    <span class="helper-chip">10-13 characters</span>
+                    <span class="helper-chip">Mobile friendly</span>
+                </div>
+
+                <div id="loadingContainer" class="loading-container hidden">
+                    <div class="loading-meta">
+                        <span>Searching database...</span>
+                        <span id="loadingPercent">0%</span>
+                    </div>
+                    <div class="loading-track">
+                        <div id="loadingBar" class="loading-bar"></div>
+                    </div>
+                </div>
+
+                <p class="error hidden" id="errorMessage"></p>
+                <p class="notice hidden" id="noticeMessage"></p>
+            </div>
+
+            <section class="results-panel hidden" id="resultsPanel">
+                <div class="results-header">
+                    <div>
+                        <h2 class="results-title">Search Results</h2>
+                        <span class="count-badge" id="countBadge">0 Found</span>
+                    </div>
+                    <div class="bulk-actions">
+                        <button class="action-button primary-action" id="copyAllButton">Copy All</button>
+                        <button class="action-button" id="shareAllButton">Share All</button>
+                    </div>
+                </div>
+
+                <div class="results-list" id="resultsList"></div>
+            </section>
+
+            <div class="empty-state hidden" id="emptyState">
+                No records found. Try another phone number or CNIC.
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const searchForm = document.getElementById("searchForm");
+        const searchInput = document.getElementById("searchInput");
+        const searchButton = document.getElementById("searchButton");
+        const clearButton = document.getElementById("clearButton");
+        const loadingContainer = document.getElementById("loadingContainer");
+        const loadingBar = document.getElementById("loadingBar");
+        const loadingPercent = document.getElementById("loadingPercent");
+        const errorMessage = document.getElementById("errorMessage");
+        const noticeMessage = document.getElementById("noticeMessage");
+        const resultsPanel = document.getElementById("resultsPanel");
+        const resultsList = document.getElementById("resultsList");
+        const countBadge = document.getElementById("countBadge");
+        const emptyState = document.getElementById("emptyState");
+        const copyAllButton = document.getElementById("copyAllButton");
+        const shareAllButton = document.getElementById("shareAllButton");
+
+        let activeRecords = [];
+        let loadingInterval = null;
+
+        searchForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+
+            const query = searchInput.value.trim();
+
+            if (!/^[0-9]{10,13}$/.test(query)) {
+                showError("Please enter a valid phone number or CNIC using digits only.");
+                return;
+            }
+
+            startLoading();
+            clearMessages();
+            clearResults();
+            searchButton.disabled = true;
+
+            try {
+                const response = await fetch(`/api/search?query=${encodeURIComponent(query)}`);
+                const payload = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(payload.error || "No records found for this search.");
+                }
+
+                activeRecords = payload.records || [];
+
+                if (payload.note) {
+                    showNotice(payload.note);
+                }
+
+                renderResults(activeRecords);
+                clearButton.classList.remove("hidden");
+            } catch (error) {
+                showError(error.message || "Unable to search right now.");
+                emptyState.classList.remove("hidden");
+            } finally {
+                stopLoading();
+                searchButton.disabled = false;
+            }
+        });
+
+        clearButton.addEventListener("click", () => {
+            searchInput.value = "";
+            activeRecords = [];
+            clearMessages();
+            clearResults();
+            clearButton.classList.add("hidden");
+            searchInput.focus();
+        });
+
+        copyAllButton.addEventListener("click", () => {
+            copyText(formatRecords(activeRecords), copyAllButton);
+        });
+
+        shareAllButton.addEventListener("click", () => {
+            const text = `SIM Info Results:\n\n${formatRecords(activeRecords)}\n\nVisit: ${window.location.href}`;
+
+            if (navigator.share) {
+                navigator.share({ title: "PAK SIM DB", text });
+            } else {
+                copyText(text, shareAllButton, "Results Copied!");
+            }
+        });
+
+        function renderResults(records) {
+            if (!records.length) {
+                emptyState.classList.remove("hidden");
+                return;
+            }
+
+            countBadge.textContent = `${records.length} Found`;
+            resultsList.innerHTML = records.map((record) => `
+                <article class="result-item">
+                    <div class="record-grid">
+                        <div class="record-field">
+                            <div class="label-small">Name</div>
+                            <div class="value-small">${escapeHtml(record.Name)}</div>
+                        </div>
+                        <div class="record-field">
+                            <div class="label-small">Phone Number</div>
+                            <div class="value-small value-accent">${escapeHtml(record.Phone)}</div>
+                        </div>
+                        <div class="record-field">
+                            <div class="label-small">ID Number (CNIC)</div>
+                            <div class="value-small value-accent">${escapeHtml(record.CNIC)}</div>
+                        </div>
+                        <div class="record-field">
+                            <div class="label-small">Network</div>
+                            <div class="value-small">${escapeHtml(record.Network)}</div>
+                        </div>
+                        <div class="record-field full">
+                            <div class="label-small">Address</div>
+                            <div class="value-small">${escapeHtml(record.Address)}</div>
+                        </div>
+                    </div>
+                </article>
+            `).join("");
+            resultsPanel.classList.remove("hidden");
+        }
+
+        function formatRecords(records) {
+            return records.map((data, index) => {
+                return `Record ${index + 1}\nName: ${data.Name}\nPhone: ${data.Phone}\nCNIC: ${data.CNIC}\nNetwork: ${data.Network}\nAddress: ${data.Address}`;
+            }).join("\n\n");
+        }
+
+        function copyText(text, button, message = "Copied!") {
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(text).then(() => handleCopySuccess(button, message));
+            } else {
+                const textArea = document.createElement("textarea");
+                textArea.value = text;
+                textArea.style.position = "fixed";
+                textArea.style.left = "-9999px";
+                textArea.style.top = "0";
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                document.execCommand("copy");
+                document.body.removeChild(textArea);
+                handleCopySuccess(button, message);
+            }
+        }
+
+        function handleCopySuccess(button, message) {
+            showNotification(message);
+            const originalText = button.innerText;
+            button.innerText = message;
+            setTimeout(() => { button.innerText = originalText; }, 2000);
+        }
+
+        function startLoading() {
+            loadingContainer.classList.remove("hidden");
+            loadingBar.style.width = "0%";
+            loadingPercent.innerText = "0%";
+
+            let progress = 0;
+            loadingInterval = setInterval(() => {
+                progress += Math.random() * 15;
+                if (progress > 95) {
+                    progress = 95;
+                    clearInterval(loadingInterval);
+                }
+                loadingBar.style.width = `${progress}%`;
+                loadingPercent.innerText = `${Math.round(progress)}%`;
+            }, 150);
+        }
+
+        function stopLoading() {
+            clearInterval(loadingInterval);
+            loadingBar.style.width = "100%";
+            loadingPercent.innerText = "100%";
+            setTimeout(() => loadingContainer.classList.add("hidden"), 300);
+        }
+
+        function clearResults() {
+            resultsPanel.classList.add("hidden");
+            emptyState.classList.add("hidden");
+            resultsList.innerHTML = "";
+        }
+
+        function clearMessages() {
+            errorMessage.classList.add("hidden");
+            noticeMessage.classList.add("hidden");
+            errorMessage.textContent = "";
+            noticeMessage.textContent = "";
+        }
+
+        function showError(message) {
+            clearMessages();
+            errorMessage.textContent = message;
+            errorMessage.classList.remove("hidden");
+        }
+
+        function showNotice(message) {
+            noticeMessage.textContent = message;
+            noticeMessage.classList.remove("hidden");
+        }
+
+        function showNotification(message) {
+            const notification = document.createElement("div");
+            notification.className = "copy-success";
+            notification.textContent = message;
+            document.body.appendChild(notification);
+            setTimeout(() => {
+                notification.style.opacity = "0";
+                setTimeout(() => notification.remove(), 500);
+            }, 2000);
+        }
+
+        function escapeHtml(value) {
+            return String(value)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+    </script>
+</body>
+</html>

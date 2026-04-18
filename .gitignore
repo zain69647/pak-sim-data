@@ -1,0 +1,9 @@
+logs/
+node_modules/
+.vercel/
+.env
+config.php
+setup.php
+style.php
+css.php
+index.php
